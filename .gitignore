@@ -9,6 +9,9 @@ tmp
 # dependencies
 node_modules
 
+# Local uploaded media
+/var/uploads/
+
 # IDEs and editors
 /.idea
 .project
