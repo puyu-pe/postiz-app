@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "chrome-devtools": {
+      "command": "pnpm",
+      "args": [
+        "dlx",
+        "chrome-devtools-mcp@1.12.0",
+        "--autoConnect",
+        "--userDataDir=/home/socamaru/.var/app/com.google.Chrome/config/google-chrome",
+        "--no-usage-statistics",
+        "--no-performance-crux"
+      ],
+      "env": {
+        "CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS": "1",
+        "CHROME_DEVTOOLS_MCP_NO_CONFIG_DISCOVERY": "1"
+      },
+      "exposure": "codemode",
+      "description": "Chrome DevTools MCP conectando al Chrome existente; inspección requiere activar Remote Debugging y aprobar el diálogo en Chrome."
+    }
+  }
+}
