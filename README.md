@@ -132,6 +132,36 @@
 
 To have the project up and running, please follow the [Quick Start Guide](https://docs.postiz.com/quickstart)
 
+## Desarrollo local en Linux
+
+Usa Node.js `>=22.12.0 <23` y pnpm `10.6.1`, según `package.json`. Con nvm para Fish, ejecuta `nvm use 22` en **cada terminal**; en otros shells utiliza el gestor de versiones que tengas configurado. Ejecuta los comandos siguientes desde la raíz del repositorio.
+
+1. Crea `.env` solamente si no existe: `test -e .env || cp .env.example .env`. Conserva cualquier configuración previa y no publiques este archivo. Ajusta:
+   - `DATABASE_URL`: PostgreSQL en `localhost:15432`, con la base y credenciales de desarrollo de `docker-compose.dev.yaml`.
+   - `REDIS_URL=redis://localhost:6379`, `TEMPORAL_ADDRESS=localhost:7233` y `TEMPORAL_NAMESPACE=default`.
+   - `FRONTEND_URL=http://localhost:4200`, `NEXT_PUBLIC_BACKEND_URL=http://localhost:3000` y `BACKEND_INTERNAL_URL=http://localhost:3000`.
+   - `JWT_SECRET`: un secreto aleatorio propio; puedes generar uno con `node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"`. No compartas su salida.
+   - `STORAGE_PROVIDER=local` y `UPLOAD_DIRECTORY`: ruta **absoluta** de `var/uploads` dentro de tu checkout, común a las tres aplicaciones. Configura `NEXT_PUBLIC_UPLOAD_STATIC_DIRECTORY=./uploads`; no es una ruta absoluta del host.
+2. Instala las dependencias: `pnpm install --frozen-lockfile`. La instalación genera Prisma Client. No habilites indiscriminadamente scripts de dependencias que pnpm haya omitido.
+3. Inicia la infraestructura: `podman-compose -f docker-compose.dev.yaml up -d postiz-postgres postiz-redis temporal`. Se levantan cinco servicios contando PostgreSQL de Temporal y Elasticsearch, sin los paneles opcionales. Los puertos publicados están restringidos a `127.0.0.1`; PostgreSQL usa `15432` en el host y `5432` dentro del contenedor. Espera a que los servicios estén listos.
+4. Para la preparación inicial, comprueba que `DATABASE_URL` apunta exclusivamente a tu base local de desarrollo y ejecuta `pnpm run prisma-db-push`. No uses reset ni aceptes pérdida de datos para resolver errores. En arranques posteriores no es necesario repetirlo si el esquema no cambió.
+5. Arranca las aplicaciones una por una, cada una en su propia terminal y con Node 22 activo:
+   - Backend: `pnpm run dev:backend`.
+   - Frontend: `pnpm run dev:frontend`.
+   - Orchestrator: `pnpm run dev:orchestrator`.
+
+Los scripts originales conservan Next.js en desarrollo y Nest en watch. `pnpm run dev` también arranca la extensión del navegador; no es necesario para este recorrido. Los servidores de las aplicaciones escuchan en interfaces de red, a diferencia de la infraestructura restringida a localhost: tenlo en cuenta en redes compartidas. La compilación inicial puede consumir bastante memoria; arranca secuencialmente y observa el sistema.
+
+Abre `http://localhost:4200/auth`. La API responde en `http://localhost:3000/` y el estado de conexión del orchestrator con Temporal en `http://localhost:3002/health/status`. Estas comprobaciones no sustituyen una prueba de registro, login y subida de una imagen desde la biblioteca de medios. Los proveedores externos requieren su propia configuración; no son necesarios para comprobar el acceso local.
+
+Para detener las aplicaciones iniciadas en esas terminales, usa `Ctrl+C` en cada una. Después detén únicamente la infraestructura de este Compose, conservando sus datos:
+
+```sh
+podman-compose -f docker-compose.dev.yaml stop temporal postiz-postgres postiz-redis temporal-postgresql temporal-elasticsearch
+```
+
+No uses `down -v`, borrados de volúmenes ni comandos globales de terminación de procesos para una parada normal.
+
 ## Sponsor Postiz
 
 We now offer a few options to sponsor Postiz:
