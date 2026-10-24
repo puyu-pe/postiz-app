@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json.schemastore.org/nest-cli",
+  "collection": "@nestjs/schematics",
+  "monorepo": false,
+  "sourceRoot": "apps/backend/src",
+  "entryFile": "main",
+  "language": "ts",
+  "compilerOptions": {
+    "manualRestart": true,
+    "tsConfigPath": "apps/backend/tsconfig.swc.json",
+    "webpack": false,
+    "deleteOutDir": false,
+    "typeCheck": false,
+    "builder": {
+      "type": "swc",
+      "options": {
+        "swcrcPath": "scripts/dev/swc.json",
+        "outDir": ".dev-state/swc/backend",
+        "filenames": [
+          "apps/backend/src",
+          "libraries/helpers/src",
+          "libraries/nestjs-libraries/src"
+        ],
+        "stripLeadingPaths": false,
+        "sync": true,
+        "extensions": [
+          ".ts",
+          ".js"
+        ],
+        "copyFiles": false,
+        "deleteDirOnStart": false
+      }
+    },
+    "assets": [],
+    "watchAssets": false,
+    "plugins": []
+  }
+}

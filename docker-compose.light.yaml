@@ -1,0 +1,51 @@
+name: ${LIGHT_COMPOSE_PROJECT:-postiz-light}
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${LIGHT_POSTGRES_USER:-postiz_light}
+      POSTGRES_PASSWORD: ${LIGHT_POSTGRES_PASSWORD:-postiz-light-local-only}
+      POSTGRES_DB: ${LIGHT_POSTGRES_DB:-postiz_light}
+    ports:
+      - "127.0.0.1:${LIGHT_POSTGRES_PORT:-15433}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:${LIGHT_REDIS_PORT:-6380}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  temporal:
+    image: temporalio/temporal:1.9.1
+    command: ["server", "start-dev", "--ip", "0.0.0.0", "--headless", "--db-filename", "/var/lib/temporal/temporal.db", "--namespace", "${LIGHT_TEMPORAL_NAMESPACE:-default}"]
+    ports:
+      - "127.0.0.1:${LIGHT_TEMPORAL_PORT:-7234}:7233"
+    volumes:
+      - temporal-data:/var/lib/temporal
+    healthcheck:
+      test: ["CMD", "temporal", "operator", "cluster", "health", "--address", "127.0.0.1:7233"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 15s
+
+volumes:
+  postgres-data:
+  redis-data:
+  temporal-data:

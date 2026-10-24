@@ -132,35 +132,39 @@
 
 To have the project up and running, please follow the [Quick Start Guide](https://docs.postiz.com/quickstart)
 
-## Desarrollo local en Linux
+## Linux development
 
-Usa Node.js `>=22.12.0 <23` y pnpm `10.6.1`, según `package.json`. Con nvm para Fish, ejecuta `nvm use 22` en **cada terminal**; en otros shells utiliza el gestor de versiones que tengas configurado. Ejecuta los comandos siguientes desde la raíz del repositorio.
+Start with the English [Linux development guide](docs/development.md#quickstart-lightweight-local-development) for the lightweight background Make workflow, isolated infrastructure, safe initial schema setup and local compiler choice. The controller safety suite has passed independent review. SWC backend/workers readiness and reload passed; workers-off browser trials exercised signup/password login, local upload/preview and visible frontend HMR. A subsequent **default-full** `make up` with both original Nest SWC watchers, original Next dev and light infrastructure passed a **631.9-second bounded coexistence smoke**, repeated-up identity preservation, recent owned worker polling and actual authenticated Calendar/Media browser checks. This is not production/load/leak testing; the bounded development verification has passed independent review. A private guard misclassified intentional worker exit during post-smoke teardown; fallback and two further `make down` calls succeeded, with owned resources stopped and original services/data preserved. Both complete server typechecks passed separately with a scoped 4GiB V8 heap inside a monitored 6GiB cap; no frontend/whole-repository typecheck is claimed. Docker runtime validation is explicitly out of scope locally and in CI; compatibility is assumed, not verified. Detailed evidence and limitations are in the [validation records](docs/development-validation.md).
 
-1. Crea `.env` solamente si no existe: `test -e .env || cp .env.example .env`. Conserva cualquier configuración previa y no publiques este archivo. Ajusta:
-   - `DATABASE_URL`: PostgreSQL en `localhost:15432`, con la base y credenciales de desarrollo de `docker-compose.dev.yaml`.
-   - `REDIS_URL=redis://localhost:6379`, `TEMPORAL_ADDRESS=localhost:7233` y `TEMPORAL_NAMESPACE=default`.
-   - `FRONTEND_URL=http://localhost:4200`, `NEXT_PUBLIC_BACKEND_URL=http://localhost:3000` y `BACKEND_INTERNAL_URL=http://localhost:3000`.
-   - `JWT_SECRET`: un secreto aleatorio propio; puedes generar uno con `node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"`. No compartas su salida.
-   - `STORAGE_PROVIDER=local` y `UPLOAD_DIRECTORY`: ruta **absoluta** de `var/uploads` dentro de tu checkout, común a las tres aplicaciones. Configura `NEXT_PUBLIC_UPLOAD_STATIC_DIRECTORY=./uploads`; no es una ruta absoluta del host.
-2. Instala las dependencias: `pnpm install --frozen-lockfile`. La instalación genera Prisma Client. No habilites indiscriminadamente scripts de dependencias que pnpm haya omitido.
-3. Inicia la infraestructura: `podman-compose -f docker-compose.dev.yaml up -d postiz-postgres postiz-redis temporal`. Se levantan cinco servicios contando PostgreSQL de Temporal y Elasticsearch, sin los paneles opcionales. Los puertos publicados están restringidos a `127.0.0.1`; PostgreSQL usa `15432` en el host y `5432` dentro del contenedor. Espera a que los servicios estén listos.
-4. Para la preparación inicial, comprueba que `DATABASE_URL` apunta exclusivamente a tu base local de desarrollo y ejecuta `pnpm run prisma-db-push`. No uses reset ni aceptes pérdida de datos para resolver errores. En arranques posteriores no es necesario repetirlo si el esquema no cambió.
-5. Arranca las aplicaciones una por una, cada una en su propia terminal y con Node 22 activo:
+### Current manual development route
+
+Use Node.js `>=22.12.0 <23` and pnpm `10.6.1`, as declared in `package.json`. Select the required versions in each terminal using your preferred local setup. Run commands from the repository root.
+
+1. Create `.env` only if it does not exist: `test -e .env || cp .env.example .env`. Preserve any existing configuration and do not publish this file. Configure:
+   - `DATABASE_URL`: PostgreSQL at `localhost:15432`, using the development database and credentials from `docker-compose.dev.yaml`.
+   - `REDIS_URL=redis://localhost:6379`, `TEMPORAL_ADDRESS=localhost:7233`, and `TEMPORAL_NAMESPACE=default`.
+   - `FRONTEND_URL=http://localhost:4200`, `NEXT_PUBLIC_BACKEND_URL=http://localhost:3000`, and `BACKEND_INTERNAL_URL=http://localhost:3000`.
+   - `JWT_SECRET`: a private random secret; generate one with `node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"`. Do not share its output.
+   - `STORAGE_PROVIDER=local` and `UPLOAD_DIRECTORY`: the **absolute** path to `var/uploads` in your checkout, shared by all three applications. Set `NEXT_PUBLIC_UPLOAD_STATIC_DIRECTORY=./uploads`; this is not an absolute host path.
+2. Install dependencies: `pnpm install --frozen-lockfile`. This generates Prisma Client. Do not indiscriminately enable dependency scripts that pnpm has omitted.
+3. Start the infrastructure: `podman-compose -f docker-compose.dev.yaml up -d postiz-postgres postiz-redis temporal`. This starts five services including Temporal's PostgreSQL and Elasticsearch dependencies, without the optional dashboards. Published ports are restricted to `127.0.0.1`; PostgreSQL uses `15432` on the host and `5432` inside the container. Wait until the services are ready.
+4. For initial preparation, verify that `DATABASE_URL` points exclusively to your local development database, then run `pnpm run prisma-db-push`. Do not use reset or accept data loss to resolve errors. This step need not be repeated on subsequent starts unless the schema changes.
+5. Start the applications one at a time, each in its own terminal with Node 22 active:
    - Backend: `pnpm run dev:backend`.
    - Frontend: `pnpm run dev:frontend`.
    - Orchestrator: `pnpm run dev:orchestrator`.
 
-Los scripts originales conservan Next.js en desarrollo y Nest en watch. `pnpm run dev` también arranca la extensión del navegador; no es necesario para este recorrido. Los servidores de las aplicaciones escuchan en interfaces de red, a diferencia de la infraestructura restringida a localhost: tenlo en cuenta en redes compartidas. La compilación inicial puede consumir bastante memoria; arranca secuencialmente y observa el sistema.
+The existing scripts retain Next.js development mode and Nest watch mode. `pnpm run dev` also starts the browser extension, which is not needed for this route. Application servers may listen on network interfaces beyond loopback, unlike the infrastructure; account for this on shared networks. Initial compilation can use substantial memory, so start components sequentially and monitor the system.
 
-Abre `http://localhost:4200/auth`. La API responde en `http://localhost:3000/` y el estado de conexión del orchestrator con Temporal en `http://localhost:3002/health/status`. Estas comprobaciones no sustituyen una prueba de registro, login y subida de una imagen desde la biblioteca de medios. Los proveedores externos requieren su propia configuración; no son necesarios para comprobar el acceso local.
+Open `http://localhost:4200/auth`. The API is available at `http://localhost:3000/`; the orchestrator's Temporal connection status is at `http://localhost:3002/health/status`. These checks do not replace testing registration, login, and uploading an image through the media library. External providers require their own configuration and are not needed to check local access.
 
-Para detener las aplicaciones iniciadas en esas terminales, usa `Ctrl+C` en cada una. Después detén únicamente la infraestructura de este Compose, conservando sus datos:
+Stop applications started in those terminals with Ctrl+C in each. Then stop only this Compose environment's infrastructure, preserving its data:
 
 ```sh
 podman-compose -f docker-compose.dev.yaml stop temporal postiz-postgres postiz-redis temporal-postgresql temporal-elasticsearch
 ```
 
-No uses `down -v`, borrados de volúmenes ni comandos globales de terminación de procesos para una parada normal.
+Do not use `down -v`, delete volumes, or use global process-termination commands for a normal shutdown.
 
 ## Sponsor Postiz
 

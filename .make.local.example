@@ -1,0 +1,6 @@
+# Copy to the ignored .make.local to select a locally installed engine.
+# Default is Docker; no automatic engine switching is performed.
+CONTAINER_ENGINE=podman
+# Optional server-only compiler (shared default: tsc). SWC does not typecheck.
+# Stop live apps with make down before changing this selection.
+# DEV_COMPILER=swc

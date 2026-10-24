@@ -1,0 +1,22 @@
+{
+  "extends": "./tsconfig.build.json",
+  "compilerOptions": {
+    "outDir": "../../.dev-state/swc/backend",
+    "declaration": false,
+    "incremental": false,
+    "paths": {
+      "@gitroom/backend/*": [
+        "apps/backend/src/*"
+      ],
+      "@gitroom/orchestrator/*": [
+        "apps/orchestrator/src/*"
+      ],
+      "@gitroom/helpers/*": [
+        "libraries/helpers/src/*"
+      ],
+      "@gitroom/nestjs-libraries/*": [
+        "libraries/nestjs-libraries/src/*"
+      ]
+    }
+  }
+}

@@ -37,7 +37,12 @@
     "docker-build": "./var/docker/docker-build.sh",
     "docker-create": "./var/docker/docker-create.sh",
     "postinstall": "pnpm run prisma-generate",
-    "test": "jest --coverage --detectOpenHandles --reporters=default --reporters=jest-junit"
+    "test": "jest --coverage --detectOpenHandles --reporters=default --reporters=jest-junit",
+    "dev:backend:swc": "pnpm --filter ./apps/backend run dev:swc",
+    "dev:orchestrator:swc": "pnpm --filter ./apps/orchestrator run dev:swc",
+    "typecheck:backend": "tsc --noEmit -p apps/backend/tsconfig.build.json --incremental false",
+    "typecheck:orchestrator": "tsc --noEmit -p apps/orchestrator/tsconfig.build.json --incremental false",
+    "typecheck": "pnpm run typecheck:backend && pnpm run typecheck:orchestrator"
   },
   "dependencies": {
     "@ag-ui/mastra": "^1.1.4",
