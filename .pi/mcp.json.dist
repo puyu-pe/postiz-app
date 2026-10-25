@@ -17,6 +17,14 @@
       },
       "exposure": "codemode",
       "description": "Chrome DevTools MCP conectando al Chrome existente; inspección requiere activar Remote Debugging y aprobar el diálogo en Chrome."
+    },
+    "postiz": {
+      "url": "http://127.0.0.1:3000/mcp",
+      "headers": {
+        "Authorization": "!test -f \"$HOME/.config/postiz/dev-api-key\" && test -r \"$HOME/.config/postiz/dev-api-key\" || exit 1; IFS= read -r key < \"$HOME/.config/postiz/dev-api-key\" || test -n \"$key\"; test -n \"$key\" || exit 1; printf 'Bearer %s\\n' \"$key\""
+      },
+      "exposure": "codemode",
+      "description": "Postiz development MCP server."
     }
   }
 }
