@@ -67,6 +67,7 @@ i18n.cache
 
 # Local lightweight development controller state, logs and machine-specific Make overrides
 /.make.local
+/.dev.env.local
 /.dev-state/
 /scripts/dev/**/__pycache__/
 

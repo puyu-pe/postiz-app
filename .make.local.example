@@ -4,3 +4,5 @@ CONTAINER_ENGINE=podman
 # Optional server-only compiler (shared default: tsc). SWC does not typecheck.
 # Stop live apps with make down before changing this selection.
 # DEV_COMPILER=swc
+# Private app/datastore settings belong in ignored .dev.env.local, copied from
+# .dev.env.example. This trusted Make file is only for engine/compiler choices.

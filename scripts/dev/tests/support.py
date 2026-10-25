@@ -34,6 +34,11 @@ MAKE_INPUTS = (
     'TEMPORAL_ADDRESS', 'TEMPORAL_NAMESPACE', 'TEMPORAL_TLS', 'TEMPORAL_API_KEY',
     'PORT', 'ORCHESTRATOR_PORT',
 )
+APP_MAKE_INPUTS = (
+    'FRONTEND_URL', 'NEXT_PUBLIC_BACKEND_URL', 'BACKEND_INTERNAL_URL', 'MAIN_URL',
+    'NEXT_PUBLIC_OVERRIDE_BACKEND_URL', 'STORAGE_PROVIDER', 'UPLOAD_DIRECTORY',
+    'NEXT_PUBLIC_UPLOAD_STATIC_DIRECTORY', 'JWT_SECRET', 'NOT_SECURED',
+)
 
 
 def eventually(predicate, seconds=3):
@@ -82,6 +87,9 @@ class ControllerCase(unittest.TestCase):
             patcher = patch.object(module, 'STATE', self.dir)
             patcher.start()
             self.addCleanup(patcher.stop)
+        self.toolchain_patch = patch.object(controller, 'validate_toolchain', return_value=None)
+        self.toolchain_patch.start()
+        self.addCleanup(self.toolchain_patch.stop)
         self.real_launch = processes.launch
         # Unexpected launch/engine access must fail rather than touch real apps.
         for target in ('processes.launch', 'infra.shutil.which'):
@@ -148,33 +156,59 @@ class ControllerCase(unittest.TestCase):
     def make_fixture(self):
         # Exercise a private .make.local, never replace the user's ignored file.
         makefile = self.dir / 'Makefile'
-        makefile.write_text((config.ROOT / 'Makefile').read_text() + '''
+        makefile.write_text((config.ROOT / 'Makefile').read_text().replace(
+            'python3 scripts/dev/controller.py', 'python3 scripts/dev/controller.py') + '''
 .PHONY: probe-config
 probe-config:
-\t@python3 -c 'import json,os,sys; print(json.dumps({k: os.environ.get(k) for k in sys.argv[1:]}))' ''' + ' '.join(MAKE_INPUTS) + '\n')
+\t@python3 -c 'import json,os,sys; print(json.dumps({k: os.environ.get(k) for k in sys.argv[1:]}))' ''' + ' '.join(MAKE_INPUTS + APP_MAKE_INPUTS) + '''
+.PHONY: probe-private
+probe-private:
+\t@python3 scripts/dev/controller.py --probe-dev-env
+''')
+        fake_bin = self.dir / 'fake-bin'
+        fake_bin.mkdir()
+        for name, version in (('node', 'v22.12.0'), ('pnpm', '10.6.1')):
+            executable = fake_bin / name
+            executable.write_text(f'#!{sys.executable}\nimport sys\nassert sys.argv[1:] == ["--version"]\nprint({version!r})\n')
+            executable.chmod(0o700)
+        (self.dir / 'package.json').write_text((config.ROOT / 'package.json').read_text())
+        (self.dir / 'node_modules').mkdir()
         script = self.dir / 'scripts/dev/controller.py'
         script.parent.mkdir(parents=True)
         # Real argument/config validation, with a hard guard against any engine
         # or app invocation even if a regression accepts an invalid input.
-        script.write_text(f'''import sys
+        script.write_text(f'''import json, os, sys
 from pathlib import Path
 sys.path.insert(0, {str(config.ROOT / 'scripts/dev')!r})
-import controller
+import config, controller
+config.ROOT = Path({str(self.dir)!r})
+config.DEV_FILE = Path({str(self.dir / '.dev.env.local')!r})
+config.dev_environment.__defaults__ = (None, config.DEV_FILE)
 controller.STATE = Path({str(self.dir / 'state')!r})
 def forbidden(*args, **kwargs):
     raise AssertionError('TEST: engine or app launch reached')
 controller.Infrastructure = forbidden
 controller.processes.launch = forbidden
+if os.environ.get('POSTIZ_TEST_MOCK_LISTENERS') == '1':
+    controller.processes.listeners = lambda port: []
+if sys.argv[1:] == ['--probe-dev-env']:
+    print(json.dumps({{key: controller.dev_environment().get(key) for key in {(APP_MAKE_INPUTS + ('PORT',))!r}}}))
+    raise SystemExit(0)
 try:
     controller.main()
 except Exception as exc:
     print('dev controller:', exc, file=sys.stderr)
     sys.exit(1)
 ''')
-
-    def fixture_make(self, target, assignments=(), env=None):
+    def fixture_make(self, target, assignments=(), env=None, mock_listeners=False):
+        child_env = dict(os.environ) if env is None else dict(env)
+        child_env['PATH'] = str(self.dir / 'fake-bin') + os.pathsep + child_env.get('PATH', '')
+        if mock_listeners:
+            child_env['POSTIZ_TEST_MOCK_LISTENERS'] = '1'
+        else:
+            child_env.pop('POSTIZ_TEST_MOCK_LISTENERS', None)
         return subprocess.run(['make', '--no-print-directory', target, *assignments],
-                              cwd=self.dir, env=dict(os.environ) if env is None else env,
+                              cwd=self.dir, env=child_env,
                               text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
 
 

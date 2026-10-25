@@ -10,6 +10,17 @@ ROOT = Path(__file__).resolve().parents[2]
 STATE = ROOT / '.dev-state'
 PROJECT = 'postiz-light'
 SERVICES = ('postgres', 'redis', 'temporal')
+DEV_FILE = ROOT / '.dev.env.local'
+DEV_KEYS = frozenset((
+    'LIGHT_POSTGRES_USER', 'LIGHT_POSTGRES_PASSWORD', 'LIGHT_POSTGRES_DB',
+    'LIGHT_POSTGRES_PORT', 'LIGHT_REDIS_PORT', 'LIGHT_TEMPORAL_PORT',
+    'LIGHT_TEMPORAL_NAMESPACE', 'DATABASE_URL', 'REDIS_URL', 'TEMPORAL_ADDRESS',
+    'TEMPORAL_NAMESPACE', 'TEMPORAL_TLS', 'TEMPORAL_API_KEY', 'PORT',
+    'ORCHESTRATOR_PORT', 'FRONTEND_URL', 'NEXT_PUBLIC_BACKEND_URL',
+    'BACKEND_INTERNAL_URL', 'MAIN_URL', 'NEXT_PUBLIC_OVERRIDE_BACKEND_URL',
+    'STORAGE_PROVIDER', 'UPLOAD_DIRECTORY', 'NEXT_PUBLIC_UPLOAD_STATIC_DIRECTORY',
+    'JWT_SECRET', 'NOT_SECURED',
+))
 SCOPES = {
     'backend': ('backend',),
     'workers': ('backend', 'workers'),
@@ -45,7 +56,52 @@ def port(value, label):
     return int(value)
 
 
-def light_values():
+def parse_dev_file(path=DEV_FILE):
+    """Parse private settings strictly as literal KEY=value data."""
+    try:
+        text = path.read_text(encoding='utf-8')
+    except FileNotFoundError:
+        return {}
+    result = {}
+    for number, line in enumerate(text.splitlines(), 1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith('#'):
+            continue
+        if '=' not in line:
+            raise RuntimeError(f'.dev.env.local line {number}: malformed setting (missing equals)')
+        key, value = line.split('=', 1)
+        key = key.strip()
+        if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key):
+            raise RuntimeError(f'.dev.env.local line {number}: malformed key')
+        if key not in DEV_KEYS:
+            raise RuntimeError(f'.dev.env.local line {number}: unsupported key {key}')
+        if key in result:
+            raise RuntimeError(f'.dev.env.local line {number}: duplicate key {key}')
+        value = value.strip()
+        if value.startswith(('"', "'")):
+            quote = value[0]
+            if len(value) < 2 or value[-1] != quote:
+                raise RuntimeError(f'.dev.env.local line {number}: malformed value for {key}')
+            value = value[1:-1]
+        elif '"' in value or "'" in value:
+            raise RuntimeError(f'.dev.env.local line {number}: malformed value for {key}')
+        if '\n' in value or '\r' in value:
+            raise RuntimeError(f'.dev.env.local line {number}: multiline value for {key}')
+        result[key] = value
+    return result
+
+
+def dev_environment(env=None, path=DEV_FILE):
+    """Apply private values only where the invoking environment left a key unset."""
+    effective = dict(os.environ if env is None else env)
+    for key, value in parse_dev_file(path).items():
+        effective.setdefault(key, value)
+    if effective.get('UPLOAD_DIRECTORY') and not os.path.isabs(effective['UPLOAD_DIRECTORY']):
+        effective['UPLOAD_DIRECTORY'] = str(ROOT / effective['UPLOAD_DIRECTORY'])
+    return effective
+
+
+def light_values(env=None):
     defaults = {
         'LIGHT_POSTGRES_USER': 'postiz_light',
         'LIGHT_POSTGRES_PASSWORD': 'postiz-light-local-only',
@@ -53,7 +109,8 @@ def light_values():
         'LIGHT_POSTGRES_PORT': '15433', 'LIGHT_REDIS_PORT': '6380',
         'LIGHT_TEMPORAL_PORT': '7234', 'LIGHT_TEMPORAL_NAMESPACE': 'default',
     }
-    values = {key: os.environ.get(key, value) for key, value in defaults.items()}
+    effective = dev_environment() if env is None else env
+    values = {key: effective.get(key, value) for key, value in defaults.items()}
     values['LIGHT_COMPOSE_PROJECT'] = PROJECT
     # These values enter Compose's env-file. No interpolation or line injection.
     for key, value in values.items():
@@ -66,13 +123,13 @@ def light_values():
     return values
 
 
-def app_environment(values):
+def app_environment(values, env=None):
     """Export every datastore selector, overriding dotenv's non-override loading.
 
     Reject query-based PostgreSQL host/socket overrides, Redis sentinels and
     dotenv-expand metacharacters. Error messages intentionally omit values.
     """
-    env = dict(os.environ)
+    env = dict(os.environ if env is None else env)
     env['DEV_COMPILER'] = compiler(env)
     for key in ('DATABASE_URL', 'REDIS_URL', 'TEMPORAL_ADDRESS', 'TEMPORAL_NAMESPACE'):
         if not env.get(key) or any(c in env[key] for c in '$\\\r\n'):

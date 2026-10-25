@@ -10,7 +10,7 @@ import sys
 import time
 from unittest.mock import patch
 
-from support import ControllerCase, EngineFixture, MAKE_INPUTS, BASE_ENV, eventually, config, controller, infra, processes
+from support import ControllerCase, EngineFixture, MAKE_INPUTS, APP_MAKE_INPUTS, BASE_ENV, eventually, config, controller, infra, processes
 
 
 class ControllerTests(ControllerCase):
@@ -77,7 +77,7 @@ class ControllerTests(ControllerCase):
                 with self.subTest(source=source, key=key):
                     marker = self.dir / f'EXECUTED-{source}-{key}'
                     attack = f'$(shell printf executed > {marker})invalid'
-                    env = dict(os.environ)
+                    env = {**os.environ, 'SCOPE': 'backend'}
                     args = []
                     local.write_text('')
                     if source == 'environment':
@@ -120,6 +120,50 @@ class ControllerTests(ControllerCase):
             self.assertEqual(captured.returncode, 0, captured.stderr)
             values = json.loads(captured.stdout)
             self.assertEqual(tuple(values[key] for key in ('CONTAINER_ENGINE', 'SCOPE', 'PORT')), expected)
+
+    def test_private_file_values_route_through_make_without_exporting_unset_inputs(self):
+        self.make_fixture()
+        local_file = self.dir / '.dev.env.local'
+        make_local = self.dir / '.make.local'
+        make_env = {key: value for key, value in os.environ.items() if key not in MAKE_INPUTS + APP_MAKE_INPUTS}
+        marker = self.dir / 'payload-executed'
+        local_file.write_text(f'PORT=3111\nJWT_SECRET=$(touch {marker})\nMAIN_URL=file-main\n')
+        captured = self.fixture_make('probe-private', env=make_env)
+        self.assertEqual(captured.returncode, 0, captured.stderr)
+        values = json.loads(captured.stdout)
+        self.assertEqual(values['PORT'], '3111')
+        self.assertEqual(values['JWT_SECRET'], f'$(touch {marker})')
+        self.assertEqual(values['MAIN_URL'], 'file-main')
+        self.assertFalse(marker.exists())
+
+        make_local.write_text('PORT=3222\n')
+        values = json.loads(self.fixture_make('probe-private', env=make_env).stdout)
+        self.assertEqual(values['PORT'], '3222')  # inherited Make variable beats file
+        values = json.loads(self.fixture_make('probe-private', ['PORT='], make_env).stdout)
+        self.assertEqual(values['PORT'], '')  # explicit empty Make CLI value beats both
+        make_local.write_text('PORT=\n')
+        values = json.loads(self.fixture_make('probe-private', env=make_env).stdout)
+        self.assertEqual(values['PORT'], '')  # explicit empty .make.local value beats file
+        make_local.write_text('')
+        make_env['PORT'] = '3333'
+        values = json.loads(self.fixture_make('probe-private', env=make_env).stdout)
+        self.assertEqual(values['PORT'], '3333')  # inherited environment beats file
+        make_env['PORT'] = ''
+        values = json.loads(self.fixture_make('probe-private', env=make_env).stdout)
+        self.assertEqual(values['PORT'], '')  # inherited empty remains set
+
+    def test_app_make_inputs_precedence_and_empty_export(self):
+        self.make_fixture()
+        for key in APP_MAKE_INPUTS:
+            with self.subTest(key=key):
+                env = {k: v for k, v in os.environ.items() if k not in MAKE_INPUTS + APP_MAKE_INPUTS}
+                env[key] = 'from-environment'
+                local = self.dir / '.make.local'
+                local.write_text(key + '=from-local\n')
+                captured = self.fixture_make('probe-config', env=env)
+                self.assertEqual(json.loads(captured.stdout)[key], 'from-local')
+                captured = self.fixture_make('probe-config', [key + '='], env=env)
+                self.assertEqual(json.loads(captured.stdout)[key], '')
 
     def test_precedence_for_all_supported_make_inputs(self):
         self.make_fixture()
@@ -302,6 +346,27 @@ time.sleep(60)
         self.assertIsNone(other.poll(), 'Unrelated session must survive orphan cleanup')
         self.assertTrue(processes.members(foreign))
 
+    def test_members_ambiguous_diagnostic_is_safe_and_refuses_ownership(self):
+        info = {'pid': 12345, 'pgid': 12345, 'sid': 12345, 'start': 100, 'state': 'S'}
+        token_value = 'postiz-light-secret-marker'
+        entry = {**info, 'root': str(config.ROOT), 'token': token_value}
+        path = processes.Path('/proc/12345')
+        with patch.object(processes, 'proc', side_effect=[info, info, info]), \
+             patch.object(processes.Path, 'iterdir', return_value=iter([path])), \
+             patch.object(processes.Path, 'read_bytes', return_value=b''), \
+             patch.object(processes.os, 'readlink', return_value='/tmp'), \
+             patch.object(processes, 'signal_member') as send_signal:
+            with self.assertRaisesRegex(RuntimeError, 'Ambiguous session member') as raised:
+                processes.members(entry)
+        diagnostic = str(raised.exception)
+        self.assertIn('pid=12345', diagnostic)
+        self.assertIn('tagged=False', diagnostic)
+        self.assertIn('cwd_within_root=False', diagnostic)
+        self.assertIn('start_valid=True', diagnostic)
+        self.assertIn('identity_stable=True', diagnostic)
+        self.assertNotIn(token_value, diagnostic)
+        send_signal.assert_not_called()
+
     def test_members_procfs_exit_races_and_permission_errors(self):
         # A task can exit between stat and reading its token/cwd. Only ENOENT
         # and ESRCH mean disappearance; access/IO errors must still fail closed.
@@ -419,6 +484,7 @@ time.sleep(60)
         existing, old_child = self.dummy()
         existing['destination'] = controller.fingerprint(config.app_environment(config.light_values()))
         existing['command'] = config.command('backend', os.environ)
+        existing['url_identity'] = controller.URL_IDENTITY_VERSION
         if config.compiler() == 'swc':
             existing['compiler'] = 'swc'
             existing['destination'] = controller.fingerprint(config.app_environment(config.light_values()), 'swc')
@@ -518,7 +584,7 @@ from pathlib import Path
 sys.path.insert(0, {str(config.ROOT / 'scripts/dev')!r})
 import controller
 controller.STATE=Path({str(self.dir)!r})
-def held_up(scope):
+def held_up(scope, effective=None):
     Path({str(marker)!r}).write_text(scope)
     time.sleep(60)
 controller.up=held_up

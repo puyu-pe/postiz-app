@@ -48,12 +48,14 @@ def members(entry):
         try:
             tagged = ('DEV_CONTROLLER_TOKEN=' + entry['token']).encode() in (path / 'environ').read_bytes().split(b'\0')
             cwd = Path(os.readlink(path / 'cwd'))
-            valid = tagged and cwd.is_relative_to(ROOT) and info['start'] >= entry['start']
+            cwd_within_root = cwd.is_relative_to(ROOT)
+            start_valid = info['start'] >= entry['start']
             # Re-read after environ/cwd: no accepting an identity across PID reuse.
             current = proc(info['pid'])
             if not current or current['state'] == 'Z':
                 continue
-            valid = valid and all(current[key] == info[key] for key in ('start', 'pgid', 'sid'))
+            identity_stable = all(current[key] == info[key] for key in ('start', 'pgid', 'sid'))
+            valid = tagged and cwd_within_root and start_valid and identity_stable
         except (FileNotFoundError, ProcessLookupError):
             # procfs may report ENOENT or ESRCH when a task exits between stat
             # and environ/cwd reads. All other ownership errors fail closed.
@@ -61,7 +63,10 @@ def members(entry):
         except OSError as exc:
             raise RuntimeError('Cannot verify session member ownership') from exc
         if not valid:
-            raise RuntimeError('Ambiguous session member; refusing signals')
+            raise RuntimeError(
+                f'Ambiguous session member pid={info["pid"]}; refusing signals '
+                f'(tagged={tagged}, cwd_within_root={cwd_within_root}, '
+                f'start_valid={start_valid}, identity_stable={identity_stable})')
         found.append(info)
     return found
 

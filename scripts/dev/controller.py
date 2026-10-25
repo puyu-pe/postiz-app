@@ -10,13 +10,16 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
+from shutil import which as find_executable
 import signal
 import socket
+import subprocess
 import sys
 import time
 
 from config import (ROOT, STATE, SERVICES, SCOPES, COMMANDS, light_values,
-                    app_environment, app_port, app_compiler, command, compiler)
+                    app_environment, app_port, app_compiler, command, compiler, dev_environment, parse_dev_file)
 from infra import Infrastructure
 import processes
 
@@ -38,17 +41,84 @@ def save(data, filename='processes.json'):
     tmp.replace(STATE / filename)
 
 
+URL_IDENTITY_VERSION = 1
+URL_IDENTITY_KEYS = ('MAIN_URL', 'FRONTEND_URL', 'NEXT_PUBLIC_BACKEND_URL',
+                     'BACKEND_INTERNAL_URL', 'NEXT_PUBLIC_OVERRIDE_BACKEND_URL')
+
+
+def _version_tuple(value, label):
+    match = re.fullmatch(r'v?(\d+)\.(\d+)\.(\d+)', value.strip())
+    if not match:
+        raise RuntimeError(f'Could not determine {label} version; install the required tool and retry')
+    return tuple(map(int, match.groups()))
+
+
+def validate_toolchain(env):
+    """Check declared Node/pnpm requirements from PATH without bootstrap or network."""
+    try:
+        package = json.loads((ROOT / 'package.json').read_text(encoding='utf-8'))
+        node_requirement = package['engines']['node']
+        package_manager = package['packageManager']
+        node_bin = find_executable('node', path=env.get('PATH'))
+        pnpm_bin = find_executable('pnpm', path=env.get('PATH'))
+    except (OSError, KeyError, TypeError, json.JSONDecodeError):
+        raise RuntimeError('Cannot read the declared Node.js/pnpm requirements from package.json') from None
+    if not node_bin:
+        raise RuntimeError(f'Node.js is missing from PATH; package.json requires {node_requirement}; install/select it locally')
+    if not pnpm_bin:
+        raise RuntimeError(f'pnpm is missing from PATH; package.json requires {package_manager}; install/select it locally')
+    try:
+        node_result = subprocess.run([node_bin, '--version'], cwd=ROOT, env=env, text=True,
+                                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5, check=True)
+        node_version = _version_tuple(node_result.stdout, 'Node.js')
+    except (OSError, subprocess.SubprocessError, RuntimeError) as exc:
+        detail = 'version format' if isinstance(exc, RuntimeError) else 'PATH tool execution'
+        raise RuntimeError(f'Could not verify Node.js version from PATH ({detail}); check the required tool and retry') from None
+    # A PATH pnpm may be a Corepack shim. Force Corepack's documented controls
+    # for this probe only so ambient opt-ins cannot trigger a download or pin edit.
+    pnpm_env = {**env, 'COREPACK_ENABLE_NETWORK': '0',
+                'COREPACK_ENABLE_DOWNLOAD_PROMPT': '0', 'COREPACK_ENABLE_AUTO_PIN': '0'}
+    try:
+        pnpm_result = subprocess.run([pnpm_bin, '--version'], cwd=ROOT, env=pnpm_env, text=True,
+                                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5, check=True)
+    except (OSError, subprocess.SubprocessError):
+        raise RuntimeError(
+            f'Could not verify pnpm from PATH; package.json requires {package_manager}. '
+            'For Corepack, make this version available in its local cache first, or manually install/select '
+            'the required pnpm, then retry; startup will not download or bootstrap it.'
+        ) from None
+    try:
+        pnpm_version = _version_tuple(pnpm_result.stdout, 'pnpm')
+    except RuntimeError:
+        raise RuntimeError('Could not determine pnpm version from PATH; check the required tool and retry') from None
+    node_range = re.fullmatch(r'>=(\d+)\.(\d+)\.(\d+)\s+<(\d+)\.0\.0', node_requirement)
+    manager = re.fullmatch(r'pnpm@(\d+)\.(\d+)\.(\d+)', package_manager)
+    if not node_range or not manager:
+        raise RuntimeError('Unsupported Node.js/pnpm requirement format in package.json; update the startup check')
+    lower = tuple(map(int, node_range.groups()[:3]))
+    upper_major = int(node_range.group(4))
+    expected_pnpm = tuple(map(int, manager.groups()))
+    if not lower <= node_version < (upper_major, 0, 0):
+        raise RuntimeError(f'Node.js from PATH is outside the supported range; package.json requires {node_requirement}')
+    if pnpm_version != expected_pnpm:
+        raise RuntimeError(f'pnpm from PATH is not the required version; package.json requires {package_manager}')
+    if not (ROOT / 'node_modules').is_dir():
+        raise RuntimeError('Workspace dependencies are missing; follow docs/development.md setup instructions first')
+
+
 def fingerprint(env, selected=None):
     keys = ('DATABASE_URL', 'REDIS_URL', 'TEMPORAL_ADDRESS', 'TEMPORAL_NAMESPACE',
             'PORT', 'ORCHESTRATOR_PORT')
-    values = [env[key] for key in keys]
-    # None retains the pre-selector format solely for conservative legacy reuse.
+    values = [env.get(key) for key in keys]
+    values.append([[key, env.get(key)] for key in URL_IDENTITY_KEYS])
     if selected is not None:
         values.append(selected)
     return hashlib.sha256(json.dumps(values).encode()).hexdigest()
 
 
 def check_running(name, entry, env):
+    if entry.get('url_identity') != URL_IDENTITY_VERSION:
+        raise RuntimeError(f'{name} live URL identity is unknown; use make down, then make up to restart safely')
     selected = app_compiler(name, env)
     if 'compiler' not in entry:
         # Old controller could only launch these exact original commands. Do not
@@ -144,9 +214,11 @@ def rollback(infra, before, attempted, data, started):
         print(f'Rollback needs manual inspection: {error}', file=sys.stderr)
 
 
-def up(scope):
-    values = light_values()
-    env = app_environment(values)  # Must precede *any* engine command or launch.
+def up(scope, effective=None):
+    effective = dev_environment() if effective is None else effective
+    validate_toolchain(effective)
+    values = light_values(effective)
+    env = app_environment(values, effective)  # Must precede *any* engine command or launch.
     if not hasattr(os, 'pidfd_open') or not hasattr(signal, 'pidfd_send_signal'):
         raise RuntimeError('Linux Python with pidfd signal support is required')
     data = load()
@@ -187,6 +259,7 @@ def up(scope):
                     entry, child = processes.launch(name, env)
                     entry['compiler'] = app_compiler(name, env)
                     entry['destination'] = fingerprint(env, entry['compiler'])
+                    entry['url_identity'] = URL_IDENTITY_VERSION
                     data[name] = entry
                     started.append(name)
                     children.append(child)
@@ -248,9 +321,10 @@ def main():
     scope = os.environ.get('SCOPE', 'full') if args.scope_env else args.scope or 'full'
     if scope not in SCOPES:
         parser.error('SCOPE must be full, backend or workers')
-    if os.environ.get('CONTAINER_ENGINE', 'docker') not in ('docker', 'podman'):
+    env = dev_environment() if args.action == 'up' else os.environ
+    if env.get('CONTAINER_ENGINE', 'docker') not in ('docker', 'podman'):
         parser.error('CONTAINER_ENGINE must be docker or podman')
-    compiler()  # Validate selector for every entry point, before any engine call.
+    compiler(env)  # Validate selector for every entry point, before any engine call.
     STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
     STATE.chmod(0o700)
     with (STATE / 'controller.lock').open('a+') as lock:
@@ -259,7 +333,7 @@ def main():
         except BlockingIOError:
             raise RuntimeError('Another controller transition is in progress') from None
         if args.action == 'up':
-            up(scope)
+            up(scope, env)
         elif args.action == 'down':
             down()
         elif args.action == 'status':

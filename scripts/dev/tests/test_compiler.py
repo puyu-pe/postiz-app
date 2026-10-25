@@ -42,7 +42,7 @@ class CompilerTests(ControllerCase):
                     captured = self.fixture_make('probe-config', args, env)
                     self.assertEqual(captured.returncode, 0, captured.stderr)
                     self.assertEqual(json.loads(captured.stdout)['DEV_COMPILER'], selected)
-                    guarded = self.fixture_make('up', args, env)
+                    guarded = self.fixture_make('up', args, env, mock_listeners=True)
                     self.assertNotEqual(guarded.returncode, 0)
                     self.assertIn('TEST: engine or app launch reached', guarded.stderr)
 
@@ -84,7 +84,8 @@ class CompilerTests(ControllerCase):
         for selected in ('tsc', 'swc'):
             for scope, names in config.SCOPES.items():
                 with self.subTest(compiler=selected, scope=scope), patch.dict(os.environ, {'DEV_COMPILER': selected}), \
-                     patch.object(processes, 'launch', side_effect=launch), patch.object(controller, 'ready', return_value=True):
+                     patch.object(processes, 'launch', side_effect=launch), patch.object(controller, 'ready', return_value=True), \
+                     patch.object(processes, 'listeners', return_value=[]):
                     launched.clear()
                     controller.up(scope)
                     before = (self.dir / 'processes.json').read_bytes()
@@ -111,7 +112,8 @@ class CompilerTests(ControllerCase):
                     entry, child = self.dummy()
                     env = config.app_environment(config.light_values())
                     entry.update(compiler=original, command=config.command(name, {'DEV_COMPILER': original}),
-                                 destination=controller.fingerprint(env, original))
+                                 destination=controller.fingerprint(env, original),
+                                 url_identity=controller.URL_IDENTITY_VERSION)
                     controller.save({name: entry})
                     before = (self.dir / 'processes.json').read_bytes()
                     with patch.dict(os.environ, {'DEV_COMPILER': selected}), \
@@ -130,9 +132,24 @@ class CompilerTests(ControllerCase):
         env = config.app_environment(config.light_values())
         entry['destination'] = controller.fingerprint(env)
         entry['command'] = config.COMMANDS['backend']
+        entry['url_identity'] = controller.URL_IDENTITY_VERSION
         controller.save({'backend': entry})
         original = (self.dir / 'processes.json').read_bytes()
-        controller.check_running('backend', entry, env)  # Exact old command proves tsc.
+        controller.check_running('backend', entry, env)
+        legacy = {key: value for key, value in entry.items() if key != 'url_identity'}
+        with self.assertRaisesRegex(RuntimeError, 'URL identity is unknown.*make down.*make up'):
+            controller.check_running('backend', legacy, env)
+        controller.save({'backend': legacy})
+        before = (self.dir / 'processes.json').read_bytes()
+        with (patch.object(controller, 'Infrastructure') as engine,
+              patch.object(processes, 'terminate') as terminate,
+              self.assertRaisesRegex(RuntimeError, 'URL identity is unknown.*make down.*make up')):
+            controller.up('backend', env)
+        engine.assert_not_called()
+        terminate.assert_not_called()
+        self.assertEqual((self.dir / 'processes.json').read_bytes(), before)
+        self.assertIsNone(child.poll())
+        controller.save({'backend': entry})
         self.assertEqual((self.dir / 'processes.json').read_bytes(), original)
         cases = [
             (entry, {**env, 'DEV_COMPILER': 'swc'}),
@@ -152,7 +169,9 @@ class CompilerTests(ControllerCase):
                 terminate.assert_not_called()
                 self.assertEqual((self.dir / 'processes.json').read_bytes(), before)
                 self.assertIsNone(child.poll())
-        frontend = {**entry, 'command': config.COMMANDS['frontend']}
+        frontend = {**entry, 'command': config.COMMANDS['frontend'], 'compiler': 'next',
+                    'destination': controller.fingerprint(env, 'next'),
+                    'url_identity': controller.URL_IDENTITY_VERSION}
         controller.check_running('frontend', frontend, {**env, 'DEV_COMPILER': 'swc'})
         frontend.update(compiler='next', destination=controller.fingerprint(env, 'next'))
         controller.check_running('frontend', frontend, {**env, 'DEV_COMPILER': 'swc'})
